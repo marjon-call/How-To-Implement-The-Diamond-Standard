@@ -224,3 +224,120 @@ contract Facet2 {
 }
 ```
 If you look at the value in storage slot 0 of ```PseudoDiamond```, you see 100 which is our value! An important note on App Storage is if you need to update your AppStorage after deployment make sure to add your new state variables at the end of AppStorage to prevent storage collisions. Personally, I prefer App Storage to Diamond Storage for the organization, but both get the job done. 
+
+## Diamond.sol
+As previously mentioned, ```Diamond.sol``` is the smart contract that gets called when interacting with your application. If it helps to think of it this way, ```Diamond.sol``` “manages” the rest of your application. All facet functions will appear to be ```Diamond.sol```’s own functions.
+
+Let’s first take a look at what is happening in the constructor of ```diamond-1```.
+```
+// This is used in diamond constructor
+// more arguments are added to this struct
+// this avoids stack too deep errors
+struct DiamondArgs {
+    address owner;
+    address init;
+    bytes initCalldata;
+}
+
+contract Diamond {    
+
+    constructor(IDiamondCut.FacetCut[] memory _diamondCut, DiamondArgs memory _args) payable {
+        LibDiamond.setContractOwner(_args.owner);
+        LibDiamond.diamondCut(_diamondCut, _args.init, _args.initCalldata);
+
+        // Code can be added here to perform actions and set state variables.
+    }
+
+    // rest of code
+}
+```
+First, outside of the contract, we have a struct that formats our data. Next, we are passing that struct as a parameter along with another struct that looks like this:
+```
+struct FacetCut {
+    address facetAddress;
+    FacetCutAction action;
+    bytes4[] functionSelectors;
+}
+```
+```FacetCut``` is providing the address of the facet, the action we want to perform on the facet (add, replace, or remove), and the function’s selectors for the facet’s functions. Next, we set the contract owner, and add whatever facet data was provided to the Diamond. We will go over in more detail how this works later on. After that, if we wanted to, we can initialize state variables. Keep in mind you should never perform any state variable assignments in the constructor of a facet, because it would perform that operation inside the facet smart contract and not ```Diamond.sol```.
+
+Seems pretty straightforward so far so let’s take a look at what’s happening in the constructor for ```diamond-2``` and ```diamond-3```.
+```
+contract Diamond {    
+
+    constructor(address _contractOwner, address _diamondCutFacet) payable {        
+        LibDiamond.setContractOwner(_contractOwner);
+
+        // Add the diamondCut external function from the diamondCutFacet
+        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](1);
+        bytes4[] memory functionSelectors = new bytes4[](1);
+        functionSelectors[0] = IDiamondCut.diamondCut.selector;
+        cut[0] = IDiamondCut.FacetCut({
+            facetAddress: _diamondCutFacet,
+            action: IDiamondCut.FacetCutAction.Add,
+            functionSelectors: functionSelectors
+        });
+
+        LibDiamond.diamondCut(cut, address(0), "");        
+    }
+
+    // rest of code
+
+}
+```
+This time we only pass in the owner of the contract, and the address of ```DiamondCutFacet.sol```. Next, we are assigning the owner of the Diamond. After that we are adding the ```diamondCut()``` function so that we can add more facets. We do this by first initializing a memory array with one element of the struct type ```FacetCut```, which we saw earlier. Then we are initializing another array with one element. This time the array is ```bytes4```, and is used to store ```diamondCut()```’s function selector. Next we assign the function selector to the array by calling the Diamond Cut interface’s function ```diamondCut```, and getting its selector. After that we can assign ```cut[0]```. We use the address of ```DiamondCutFacet.sol```, add (because we want to add this facet to our Diamond), and the function selector array. Finally, we actually add ```diamondCut```. This is a lot not knowing what happens under the hood, so if it helps you can reread this section after we go over ```DiamondCut.sol```. For now, just understand that we are adding facets in the constructor.
+
+The last part of ```Diamond.sol``` is the ```fallback()``` function. This is how we will be calling our facets with the Diamond Standard. It looks almost the same in all three implementations of the Diamond Standard, so let’s go over it!
+
+```
+// Find facet for function that is called and execute the
+// function if a facet is found and return any value.
+fallback() external payable {
+    LibDiamond.DiamondStorage storage ds;
+    bytes32 position = LibDiamond.DIAMOND_STORAGE_POSITION;
+    // get diamond storage
+    assembly {
+        ds.slot := position
+    }
+    // get facet from function selector
+    address facet = address(bytes20(ds.facets[msg.sig]));
+    require(facet != address(0), "Diamond: Function does not exist");
+    // Execute external function from facet using delegatecall and return any value.
+    assembly {
+        // copy function selector and any arguments
+        calldatacopy(0, 0, calldatasize())
+        // execute function call using the facet
+        let result := delegatecall(gas(), facet, 0, calldatasize(), 0, 0)
+        // get any return value
+        returndatacopy(0, 0, returndatasize())
+        // return any return value or error back to the caller
+        switch result
+            case 0 {
+                revert(0, returndatasize())
+            }
+            default {
+                return(0, returndatasize())
+            }
+    }
+}
+```
+The first thing we are doing is initializing Diamond Storage. This is where we will store our facet’s data. Next is where the difference in the ```fallback()```s resides. We are looking at ```diamond-2``` above. In all three we are checking if the address of the facet exists. <br>
+Here is how we check in ```diamond-1```:
+```
+// get facet from function selector
+address facet = ds.facetAddressAndSelectorPosition[msg.sig].facetAddress;
+if(facet == address(0)) {
+    revert FunctionNotFound(msg.sig);
+}
+```
+Here is how we check in  ```diamond-3```:
+```
+// get facet from function selector
+address facet = ds.selectorToFacetAndPosition[msg.sig].facetAddress;
+require(facet != address(0), "Diamond: Function does not exist");
+```
+The main difference in the three implementations is that in ```diamond-2``` we store the selectors in a mapping of 32 byte storage slots.
+
+Finally, we use Yul to ```delegatecall()``` our facets by copying the calldata that was sent to ```Diamond.sol```, and checking if the call was successful.
+
+This wraps up our section on ```Diamond.sol```. Next, we will look into what was happening when we called ```diamondCut()```.
