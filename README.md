@@ -23,7 +23,7 @@ There are many reasons why you would want to use the Diamond Standard in your ap
 
 
 
-## App Storage VS Diamond Storage
+## App Storage & Diamond Storage
 Architecture of state variables is one of the most important aspects of your blockchain application. I decided to cover this section first to give you a good understanding of how state variables are managed with the Diamond Standard. Obviously proxies heavily rely on ```delegatecall()``` to execute the code from your facet contracts in the context of your main contract (```Diamond.sol```). Since all of the storage of our state variables is kept in ```Diamond.sol```, we need to make sure our variables are not overwriting each other. Before we look at the correct way to organize our state variables, let’s look at an example of the wrong way to manage state variables.
 ```
 pragma solidity^0.8.17;
@@ -223,7 +223,7 @@ contract Facet2 {
     }
 }
 ```
-If you look at the value in storage slot 0 of ```PseudoDiamond```, you see 100 which is our value! An important note on App Storage is if you need to update your AppStorage after deployment make sure to add your new state variables at the end of AppStorage to prevent storage collisions. Personally, I prefer App Storage to Diamond Storage for the organization, but both get the job done. 
+If you look at the value in storage slot 0 of ```PseudoDiamond```, you see 100 which is our value! An important note on App Storage is if you need to update your AppStorage after deployment make sure to add your new state variables at the end of AppStorage to prevent storage collisions. Personally, I prefer App Storage to Diamond Storage for the organization, but both get the job done. It is also worth noting that Diamond Storage and App Storage are not exclusive. Even if you use App Storage to manage your state variables ```LibDiamond.sol```, uses Diamond Storage to manage facet data.
 
 ## Diamond.sol
 As previously mentioned, ```Diamond.sol``` is the smart contract that gets called when interacting with your application. If it helps to think of it this way, ```Diamond.sol``` “manages” the rest of your application. All facet functions will appear to be ```Diamond.sol```’s own functions.
