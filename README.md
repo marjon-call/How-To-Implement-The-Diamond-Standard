@@ -486,3 +486,140 @@ Again, we start by initializing Diamond Storage, checking if the facet has a val
 
 ```diamond-2``` and ```diamond-3``` both obtain the same goal as ```diamond-1```’s ```diamondCut()``` function, but use different syntax and architecture. For the simplicity of this article we will not be going over them. However, if enough people are interested in learning about how they work I can make a new article in the future that will go into more detail on the differences in the implementations.
 
+
+
+## LoupeFacet.sol
+Now that we understand how to update functions in our Diamond, let’s go over how we can view our facets. Remember, for ```diamond-1``` and ```diamond-2``` it is recommended to not call these functions on chain. ```diamond-3```, however, is heavily optimized for calling these functions on chain. Again, we will only be going over ```diamond-1```, but if you understand what is happening, you should be able to both comprehend and implement any of the other implementations of the Diamond Standard.
+
+We will first look at ```facets()```. ```facets()```, returns all of the facets and their selectors for a Diamond.
+```
+function facets() external override view returns (Facet[] memory facets_) {
+    LibDiamond.DiamondStorage storage ds = LibDiamond.diamondStorage();
+    uint256 selectorCount = ds.selectors.length;
+    // create an array set to the maximum size possible
+    facets_ = new Facet[](selectorCount);
+    // create an array for counting the number of selectors for each facet
+    uint16[] memory numFacetSelectors = new uint16[](selectorCount);
+    // total number of facets
+    uint256 numFacets;
+    // loop through function selectors
+    for (uint256 selectorIndex; selectorIndex < selectorCount; selectorIndex++) {
+        bytes4 selector = ds.selectors[selectorIndex];
+        address facetAddress_ = ds.facetAddressAndSelectorPosition[selector].facetAddress;
+        bool continueLoop = false;
+        // find the functionSelectors array for selector and add selector to it
+        for (uint256 facetIndex; facetIndex < numFacets; facetIndex++) {
+            if (facets_[facetIndex].facetAddress == facetAddress_) {
+                facets_[facetIndex].functionSelectors[numFacetSelectors[facetIndex]] = selector;                                  
+                numFacetSelectors[facetIndex]++;
+                continueLoop = true;
+                break;
+            }
+        }
+        // if functionSelectors array exists for selector then continue loop
+        if (continueLoop) {
+            continueLoop = false;
+            continue;
+        }
+        // create a new functionSelectors array for selector
+        facets_[numFacets].facetAddress = facetAddress_;
+        facets_[numFacets].functionSelectors = new bytes4[](selectorCount);
+        facets_[numFacets].functionSelectors[0] = selector;
+        numFacetSelectors[numFacets] = 1;
+        numFacets++;
+    }
+    for (uint256 facetIndex; facetIndex < numFacets; facetIndex++) {
+        uint256 numSelectors = numFacetSelectors[facetIndex];
+        bytes4[] memory selectors = facets_[facetIndex].functionSelectors;
+        // setting the number of selectors
+        assembly {
+            mstore(selectors, numSelectors)
+        }
+    }
+    // setting the number of facets
+    assembly {
+        mstore(facets_, numFacets)
+    }
+}
+```
+Notice there are no input parameters, and we specify that we will be returning ```factes_```. ```factes_``` is a data structure that looks like this:
+```
+struct Facet {
+    address facetAddress;
+    bytes4[] functionSelectors;
+}
+```
+The first thing we do inside the function is initialize Diamond Storage. Next, we retrieve the number of selectors that we have. After, we initialize the array we will be returning at the end of our function. Then, we create an array to keep track of how many functions per facet, and a variable to keep track of the number of facets. Next, we loop through our function selectors. Inside our loop, we are looking to find what facet our selector belongs too. We have to loop through the facets to find which address matches our current function selectors’ address. After we find our facet, we add our function selector to that facet’s array if it exists. Otherwise, we create the array. After we finish our loop, we loop through the facets one more time. Inside this loop, we are storing the number of selectors to memory to return later on. Finally, we store the number of facets and return. The reason we are storing the number of selectors and facets is because we originally initialized our arrays to the maximum size possible. Now that we know how many specific selectors and facets we will be returning, we tell solidity the correct array size to return.
+
+The next function we will look at is ```facetFunctionSelectors()```. ```facetFunctionSelectors()``` returns the function selectors for a particular facet. It takes as a parameter the address of the targeted facet, and returns a ```bytes4[]``` array representing the function selectors.
+```
+function facetFunctionSelectors(address _facet) external override view returns (bytes4[] memory _facetFunctionSelectors) {
+    LibDiamond.DiamondStorage storage ds = LibDiamond.diamondStorage();
+    uint256 selectorCount = ds.selectors.length;
+    uint256 numSelectors;
+    _facetFunctionSelectors = new bytes4[](selectorCount);
+    // loop through function selectors
+    for (uint256 selectorIndex; selectorIndex < selectorCount; selectorIndex++) {
+        bytes4 selector = ds.selectors[selectorIndex];
+        address facetAddress_ = ds.facetAddressAndSelectorPosition[selector].facetAddress;
+        if (_facet == facetAddress_) {
+            _facetFunctionSelectors[numSelectors] = selector;
+            numSelectors++;
+        }
+    }
+    // Set the number of selectors in the array
+    assembly {
+        mstore(_facetFunctionSelectors, numSelectors)
+    }
+}
+```
+Again we initialize Diamond Storage. Then, we get the number of function selectors, and initialize our return array. Next, we loop through the selectors. Here, we are checking if the selector address is the same as our targeted facet. If it is, we store that function selector. Finally, we store the number of selectors and return.
+
+ Now we will look over ```facetAddresses()```, which returns an array of addresses for our Diamond’s facets. 
+```
+function facetAddresses() external override view returns (address[] memory facetAddresses_) {
+    LibDiamond.DiamondStorage storage ds = LibDiamond.diamondStorage();
+    uint256 selectorCount = ds.selectors.length;
+    // create an array set to the maximum size possible
+    facetAddresses_ = new address[](selectorCount);
+    uint256 numFacets;
+    // loop through function selectors
+    for (uint256 selectorIndex; selectorIndex < selectorCount; selectorIndex++) {
+        bytes4 selector = ds.selectors[selectorIndex];
+        address facetAddress_ = ds.facetAddressAndSelectorPosition[selector].facetAddress;
+        bool continueLoop = false;
+        // see if we have collected the address already and break out of loop if we have
+        for (uint256 facetIndex; facetIndex < numFacets; facetIndex++) {
+            if (facetAddress_ == facetAddresses_[facetIndex]) {
+                continueLoop = true;
+                break;
+            }
+        }
+        // continue loop if we already have the address
+        if (continueLoop) {
+            continueLoop = false;
+            continue;
+        }
+        // include address
+        facetAddresses_[numFacets] = facetAddress_;
+        numFacets++;
+    }
+    // Set the number of facet addresses in the array
+    assembly {
+        mstore(facetAddresses_, numFacets)
+    }
+}
+```
+Again, the first thing we do is initialize Diamond Storage, get the number of function selectors, and initialize our return array. We are also looping through our selectors again. We are checking what the facet address of our selector is. Then, we check if we have seen this address before. If we have, we skip this iteration of the loop. Otherwise, we are adding this new address to our return array. Again, we update the size of the array and return it.
+
+The last function we will look at from ```DiamondLoupeFacet.sol``` is ```facetAddress```. This function returns the address of a facet provided a function selector.
+```
+function facetAddress(bytes4 _functionSelector) external override view returns (address facetAddress_) {
+    LibDiamond.DiamondStorage storage ds = LibDiamond.diamondStorage();
+    facetAddress_ = ds.facetAddressAndSelectorPosition[_functionSelector].facetAddress;
+}
+```
+This function is pretty simple. We initialize Diamond Storage and take advantage of how we store our selectors, to return our facet address.
+
+This wraps up our section on the loupe facet. We now know how the Diamond Standard provides transparency for its users. Next we will look at how deploying the Diamond Standard works.
+
