@@ -341,3 +341,148 @@ The main difference in the three implementations is that in ```diamond-2``` we s
 Finally, we use Yul to ```delegatecall()``` our facets by copying the calldata that was sent to ```Diamond.sol```, and checking if the call was successful.
 
 This wraps up our section on ```Diamond.sol```. Next, we will look into what was happening when we called ```diamondCut()```.
+
+
+## DiamondCut.sol
+As we have already discussed, ```DiamondCut.sol``` is responsible for adding, removing, and replacing facets in our Diamond. All three implementations take a slightly different approach, but accomplish the same goal. Let’s look into how ```diamond-1``` works. 
+```
+contract DiamondCutFacet is IDiamondCut {
+    /// @notice Add/replace/remove any number of functions and optionally execute
+    ///         a function with delegatecall
+    /// @param _diamondCut Contains the facet addresses and function selectors
+    /// @param _init The address of the contract or facet to execute _calldata
+    /// @param _calldata A function call, including function selector and arguments
+    ///                  _calldata is executed with delegatecall on _init
+    function diamondCut(
+        FacetCut[] calldata _diamondCut,
+        address _init,
+        bytes calldata _calldata
+    ) external override {
+        LibDiamond.enforceIsContractOwner();
+        LibDiamond.diamondCut(_diamondCut, _init, _calldata);
+    }
+}
+```
+As you can see, this contract heavily relies on ```LibDiamond.sol```. All we are doing, from a high level overview, is checking that the contract owner has made this call, and then call ```diamondCut()```. Let’s look at what’s happening in ```LibDiamond.sol```. Before we do, I need to point out one big detail about ```LibDiamond.sol```. ```LibDiamond.sol``` solely uses ```internal``` functions. This adds the bytecode to our contract, saving us from needing to use another ```delegatecall()```. Ok, now that we understand how we save some gas costs in ```LibDiamond.sol```, let's look at the code of ```diamondCut()```.
+```
+// Internal function version of diamondCut
+function diamondCut(
+    IDiamondCut.FacetCut[] memory _diamondCut,
+    address _init,
+    bytes memory _calldata
+) internal {
+    for (uint256 facetIndex; facetIndex < _diamondCut.length; facetIndex++) {
+        bytes4[] memory functionSelectors = _diamondCut[facetIndex].functionSelectors;
+        address facetAddress = _diamondCut[facetIndex].facetAddress;
+        if(functionSelectors.length == 0) {
+            revert NoSelectorsProvidedForFacetForCut(facetAddress);
+        }
+        IDiamondCut.FacetCutAction action = _diamondCut[facetIndex].action;
+        if (action == IDiamond.FacetCutAction.Add) {
+            addFunctions(facetAddress, functionSelectors);
+        } else if (action == IDiamond.FacetCutAction.Replace) {
+            replaceFunctions(facetAddress, functionSelectors);
+        } else if (action == IDiamond.FacetCutAction.Remove) {
+            removeFunctions(facetAddress, functionSelectors);
+        } else {
+            revert IncorrectFacetCutAction(uint8(action));
+        }
+    }
+    emit DiamondCut(_diamondCut, _init, _calldata);
+    initializeDiamondCut(_init, _calldata);
+}
+
+
+```
+We take the same parameters as before for this function. First, we loop through our ```FacetCut``` struct. Inside the loop, we are getting our function selector and address of the facet function. We make sure the facet selector is valid, and revert otherwise. Next, we need to check the action we are performing on this specific function (add, replace, or remove). After finding the action, we call the helper function that correlates with that action. Then we emit an event to provide transparency to our users. Finally, we verify that our facet works with ```initializeDiamondCut()``` by checking if our contract has code, and can be called via```delegatecall()``` with ```_calldata```.
+
+Now that we know how ```diamondCut()``` works, let’s see how we perform each action starting with ```Add```.
+```
+function addFunctions(address _facetAddress, bytes4[] memory _functionSelectors) internal {        
+    if(_facetAddress == address(0)) {
+        revert CannotAddSelectorsToZeroAddress(_functionSelectors);
+    }
+    DiamondStorage storage ds = diamondStorage();
+    uint16 selectorCount = uint16(ds.selectors.length);                
+    enforceHasContractCode(_facetAddress, "LibDiamondCut: Add facet has no code");
+    for (uint256 selectorIndex; selectorIndex < _functionSelectors.length; selectorIndex++) {
+        bytes4 selector = _functionSelectors[selectorIndex];
+        address oldFacetAddress = ds.facetAddressAndSelectorPosition[selector].facetAddress;
+        if(oldFacetAddress != address(0)) {
+            revert CannotAddFunctionToDiamondThatAlreadyExists(selector);
+        }            
+        ds.facetAddressAndSelectorPosition[selector] = FacetAddressAndSelectorPosition(_facetAddress, selectorCount);
+        ds.selectors.push(selector);
+        selectorCount++;
+    }
+}
+```
+The input parameters are the facet contract’s address and the particular function we are working withs selector. We want to verify this contract exists by checking if the address is the zero address. Next, we initialize Diamond Storage. Then, we get the amount of selectors our Diamond already has. After, we check if our facet has contract code. Now, we need to verify that this function is not already in the Diamond. We do this by looping through the function selectors and checking if the address exists already, Otherwise, we are pushing our selector to our stored selectors.
+
+Now, let’s look at how to replace a facet!
+```
+function replaceFunctions(address _facetAddress, bytes4[] memory _functionSelectors) internal {        
+    DiamondStorage storage ds = diamondStorage();
+    if(_facetAddress == address(0)) {
+        revert CannotReplaceFunctionsFromFacetWithZeroAddress(_functionSelectors);
+    }
+    enforceHasContractCode(_facetAddress, "LibDiamondCut: Replace facet has no code");
+    for (uint256 selectorIndex; selectorIndex < _functionSelectors.length; selectorIndex++) {
+        bytes4 selector = _functionSelectors[selectorIndex];
+        address oldFacetAddress = ds.facetAddressAndSelectorPosition[selector].facetAddress;
+        // can't replace immutable functions -- functions defined directly in the diamond in this case
+        if(oldFacetAddress == address(this)) {
+            revert CannotReplaceImmutableFunction(selector);
+        }
+        if(oldFacetAddress == _facetAddress) {
+            revert CannotReplaceFunctionWithTheSameFunctionFromTheSameFacet(selector);
+        }
+        if(oldFacetAddress == address(0)) {
+            revert CannotReplaceFunctionThatDoesNotExists(selector);
+        }
+        // replace old facet address
+        ds.facetAddressAndSelectorPosition[selector].facetAddress = _facetAddress;
+    }
+}
+
+
+```
+As you may have noticed ```Replace``` starts off the same way as ```Add```. We initialize Diamond Storage, check if the facet has a valid address and code size, then loop through the selectors. First, we check if the selector is immutable. Then, we check if the function we want to replace is the same function we are adding. After, we check if the facet address is valid. Otherwise, we replace our facet.
+
+Now, let’s check out our last action, ```Remove```.
+```
+function removeFunctions(address _facetAddress, bytes4[] memory _functionSelectors) internal {        
+    DiamondStorage storage ds = diamondStorage();
+    uint256 selectorCount = ds.selectors.length;
+    if(_facetAddress != address(0)) {
+        revert RemoveFacetAddressMustBeZeroAddress(_facetAddress);
+    }        
+    for (uint256 selectorIndex; selectorIndex < _functionSelectors.length; selectorIndex++) {
+        bytes4 selector = _functionSelectors[selectorIndex];
+        FacetAddressAndSelectorPosition memory oldFacetAddressAndSelectorPosition = ds.facetAddressAndSelectorPosition[selector];
+        if(oldFacetAddressAndSelectorPosition.facetAddress == address(0)) {
+            revert CannotRemoveFunctionThatDoesNotExist(selector);
+        }
+       
+       
+        // can't remove immutable functions -- functions defined directly in the diamond
+        if(oldFacetAddressAndSelectorPosition.facetAddress == address(this)) {
+            revert CannotRemoveImmutableFunction(selector);
+        }
+        // replace selector with last selector
+        selectorCount--;
+        if (oldFacetAddressAndSelectorPosition.selectorPosition != selectorCount) {
+            bytes4 lastSelector = ds.selectors[selectorCount];
+            ds.selectors[oldFacetAddressAndSelectorPosition.selectorPosition] = lastSelector;
+            ds.facetAddressAndSelectorPosition[lastSelector].selectorPosition = oldFacetAddressAndSelectorPosition.selectorPosition;
+        }
+        // delete last selector
+        ds.selectors.pop();
+        delete ds.facetAddressAndSelectorPosition[selector];
+    }
+}
+``` 
+Again, we start by initializing Diamond Storage, checking if the facet has a valid address, then loop through the selectors. Next we get the function selector and position in storage. We verify that it actually exists, then, verify it isn’t immutable. After, we move our selector to the end of the array and perform a ```pop()``` to remove it.
+
+```diamond-2``` and ```diamond-3``` both obtain the same goal as ```diamond-1```’s ```diamondCut()``` function, but use different syntax and architecture. For the simplicity of this article we will not be going over them. However, if enough people are interested in learning about how they work I can make a new article in the future that will go into more detail on the differences in the implementations.
+
