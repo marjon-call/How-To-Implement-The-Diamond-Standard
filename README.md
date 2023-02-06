@@ -623,3 +623,76 @@ This function is pretty simple. We initialize Diamond Storage and take advantage
 
 This wraps up our section on the loupe facet. We now know how the Diamond Standard provides transparency for its users. Next we will look at how deploying the Diamond Standard works.
 
+## How To Deploy The Diamond Standard
+When deploying a Diamond, you need to deploy the facets and then deploy ```Diamond.sol```. This way you can tell your Diamond what contracts it will be calling. The easiest way to deploy a Diamond is with the npm package ```diamond-util```. Here is how to install it: <br>
+```
+npm i diamond-util
+```
+Once you have it installed, you can deploy your Diamond with the following code.
+```
+// eslint-disable-next-line no-unused-vars
+const deployedDiamond = await diamond.deploy({
+  diamondName: 'LeaseDiamond',
+  facets: [
+    'DiamondCutFacet',
+    'DiamondLoupeFacet',
+    'Facet1',
+    'Facet2'
+  ],
+  args: [/* your parameters */]
+})
+
+
+// init facets
+const diamondCutFacet = await ethers.getContractAt('DiamondCutFacet', deployedDiamond.address)
+const diamondLoupeFacet = await ethers.getContractAt('DiamondLoupeFacet', deployedDiamond.address)
+const facet1 = await ethers.getContractAt('Facet1', deployedDiamond.address)
+const facet2 = await ethers.getContractAt('Facet2', deployedDiamond.address)
+```
+This library takes care of most of the work for us! All we have to do is list our facets and the library deploys them along with the Diamond. Take note that when we initialize our contracts with ```ethers.js``` we are setting the address to ```Diamond.sol```’s address.
+
+If you want to add a new facet, you can do so by calling ```DiamondCutFacet.sol```. Here is an example.
+```
+const FacetCutAction = { Add: 0, Replace: 1, Remove: 2 }
+
+
+const Facet3 = await ethers.getContractFactory('Facet3')
+const facet3 = await Facet3.deploy()
+await facet3.deployed()
+const selectors = getSelectors(facet3).remove(['supportsInterface(bytes4)'])
+tx = await diamondCutFacet.diamondCut(
+  [{
+    facetAddress: facet3.address,
+    action: FacetCutAction.Add,
+    functionSelectors: selectors
+  }],
+  ethers.constants.AddressZero, '0x', { gasLimit: 800000 }
+)
+
+
+receipt = await tx.wait()
+```
+As you see we deploy our facet first. Then we use our npm package to get the selectors of the functions. Then we call ```DiamondCutFacet.sol``` to update our Diamond. ```Replace``` works similarly, except you have to make sure the selectors you are replacing are already in the Diamond. ```Remove```, also works similarly, but make sure the selectors you pass in are the ones you want to  remove.
+
+Congratulations! You now know how to create and deploy a blockchain application using the Diamond Standard!
+
+
+## Conclusion
+This concludes my article on the Diamond Standard. Hopefully I have helped you to understand the complexities of the Diamond Standard, and how to implement it in your own projects.
+
+For further reading on the Diamond Standard check out these links. <br>
+EIP-2535: https://eips.ethereum.org/EIPS/eip-2535 <br>
+To read up on different Diamond Standard implementations: https://github.com/mudgen/diamond <br>
+```diamond-1``` template: https://github.com/mudgen/diamond-1-hardhat <br>
+```diamond-2``` template: https://github.com/mudgen/diamond-2-hardhat <br>
+```diamond-3``` template: https://github.com/mudgen/diamond-3-hardhat <br>
+Gas Benefits of Diamond Standard: https://eip2535diamonds.substack.com/p/how-eip2535-diamonds-reduces-gas?s=w <br>
+To read Nick Mudge’s blog posts on the Diamond Standard: https://eip2535diamonds.substack.com/ <br>
+To listen to Nick Miudge walk through the Diamond Standard in video form: https://www.youtube.com/watch?v=9-MYz75FA8o <br>
+If you write, or have written, a smart contract with the Diamond Standard and want it audited by Nick Mudge’s auditing firm, check out their website: https://www.perfectabstractions.com/ <br>
+
+
+If you have any questions, or would like to see me make a tutorial on a different topic please leave a comment below. <br>
+
+If you would like to support me making tutorials, here is my Ethereum address: 0xD5FC495fC6C0FF327c1E4e3Bccc4B5987e256794.
+
